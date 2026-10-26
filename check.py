@@ -1,9 +1,14 @@
 import os
 import sys
 
+import pandas as pd
+
+import checks.exposure
 import checks.flags
 import checks.gps
+import checks.limits
 import checks.loader
+import checks.neighbours
 import checks.timeline
 
 if len(sys.argv) != 2 or not os.path.isdir(sys.argv[1]):
@@ -46,6 +51,42 @@ for station_id in stations_df.index:
     df = checks.timeline.find_gaps(station_id, df)
     clean_data[station_id] = df
 
-# 5. write_flags("flags.csv") and print "wrote flags.csv: N flags"
+# 5. Build PANEL and BAD
+all_timestamps = sorted(set().union(*(df.index for df in clean_data.values())))
+master_index = pd.DatetimeIndex(all_timestamps)
+channels = [
+    "temp_c",
+    "rh_pct",
+    "pressure_hpa",
+    "wind_kmh",
+    "wind_dir_deg",
+    "rain_mm",
+    "ghi_wm2",
+]
+
+PANEL = {}
+BAD = {}
+for ch in channels:
+    PANEL[ch] = pd.DataFrame(
+        {st: clean_data[st][ch] for st in stations_df.index}, index=master_index
+    )
+    BAD[ch] = pd.DataFrame(False, index=master_index, columns=stations_df.index)
+
+# 6. Pipeline checks in exact specified order:
+checks.limits.out_of_range(stations_df, PANEL, BAD)
+checks.limits.frozen(stations_df, PANEL, BAD)
+checks.limits.rh_saturation(stations_df, PANEL, BAD)
+checks.limits.spikes(stations_df, PANEL, BAD)
+
+NB = checks.neighbours.pick(stations_df, PANEL, BAD)
+checks.neighbours.steps("pressure_hpa", stations_df, PANEL, BAD, NB)
+checks.neighbours.steps("wind_kmh", stations_df, PANEL, BAD, NB)
+
+checks.exposure.sun_bias(stations_df, PANEL, BAD, NB)
+checks.exposure.blocked_gauge(stations_df, PANEL, BAD, NB)
+checks.exposure.rain_burst(stations_df, PANEL, BAD, NB)
+checks.exposure.snow(stations_df, PANEL, BAD)
+
+# 7. write_flags("flags.csv") and print "wrote flags.csv: N flags"
 checks.flags.write_flags("flags.csv")
 print(f"wrote flags.csv: {len(checks.flags.FLAGS)} flags")
