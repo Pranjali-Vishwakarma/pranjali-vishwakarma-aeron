@@ -6,47 +6,46 @@ import checks.gps
 import checks.loader
 import checks.timeline
 
+if len(sys.argv) != 2 or not os.path.isdir(sys.argv[1]):
+    print("usage: python check.py <data_pack_folder>")
+    sys.exit(1)
 
-def main():
-    if len(sys.argv) < 2 or not os.path.isdir(sys.argv[1]):
-        print("usage: python check.py <data_pack_folder>")
-        sys.exit(1)
+pack = sys.argv[1]
 
-    pack = sys.argv[1]
+# 1. load stations
+stations_df = checks.loader.load_stations(pack)
 
-    # 1. load stations
-    stations = checks.loader.load_stations(pack)
+# 2. for each station: load gps, parse_rmc, check_position, clock_runs
+all_gps = {}
+station_clock_runs = {}
 
-    # 2. for each station: load gps, parse_rmc, check_position (update the stations table with any returned fields), clock_runs
-    all_gps = {}
-    station_runs = {}
-    for st_id, st_row in stations.iterrows():
-        gps_df = checks.loader.load_gps(pack, st_id)
-        all_gps[st_id] = gps_df
-        rmc_df = checks.gps.parse_rmc(gps_df)
-        corrections = checks.gps.check_position(st_id, st_row, rmc_df, gps_df)
-        if corrections:
-            for k, v in corrections.items():
-                stations.loc[st_id, k] = v
-        runs = checks.gps.clock_runs(rmc_df)
-        station_runs[st_id] = runs
+for station_id in stations_df.index:
+    gps_df = checks.loader.load_gps(pack, station_id)
+    all_gps[station_id] = gps_df
+    rmc_df = checks.gps.parse_rmc(gps_df)
 
-    # 3. check_link over all stations
-    checks.gps.check_link(all_gps)
+    station_row = stations_df.loc[station_id]
+    corrected_fields = checks.gps.check_position(
+        station_id, station_row, rmc_df, gps_df
+    )
+    for field, val in corrected_fields.items():
+        stations_df.loc[station_id, field] = val
 
-    # 4. for each station: load data, drop_resent, fix_clock, find_gaps
-    clean_data = {}
-    for st_id in stations.index:
-        data_df = checks.loader.load_data(pack, st_id)
-        data_df = checks.timeline.drop_resent(st_id, data_df)
-        data_df = checks.timeline.fix_clock(st_id, data_df, station_runs[st_id])
-        data_df = checks.timeline.find_gaps(st_id, data_df)
-        clean_data[st_id] = data_df
+    runs = checks.gps.clock_runs(rmc_df)
+    station_clock_runs[station_id] = runs
 
-    # 5. write_flags("flags.csv") and print "wrote flags.csv: N flags"
-    checks.flags.write_flags("flags.csv")
-    print(f"wrote flags.csv: {len(checks.flags.FLAGS)} flags")
+# 3. check_link over all stations
+checks.gps.check_link(all_gps)
 
+# 4. for each station: load data, drop_resent, fix_clock, find_gaps
+clean_data = {}
+for station_id in stations_df.index:
+    df = checks.loader.load_data(pack, station_id)
+    df = checks.timeline.drop_resent(station_id, df)
+    df = checks.timeline.fix_clock(station_id, df, station_clock_runs[station_id])
+    df = checks.timeline.find_gaps(station_id, df)
+    clean_data[station_id] = df
 
-if __name__ == "__main__":
-    main()
+# 5. write_flags("flags.csv") and print "wrote flags.csv: N flags"
+checks.flags.write_flags("flags.csv")
+print(f"wrote flags.csv: {len(checks.flags.FLAGS)} flags")

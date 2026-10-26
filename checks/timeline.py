@@ -1,12 +1,11 @@
 """Timestamp checks: gaps, duplicates, backwards jumps."""
 
-import numpy as np
 import pandas as pd
 
 import checks.flags
 import config
 
-MEASUREMENT_COLS = [
+MEASUREMENT_COLUMNS = [
     "temp_c",
     "rh_pct",
     "pressure_hpa",
@@ -18,99 +17,124 @@ MEASUREMENT_COLS = [
 
 
 def drop_resent(station_id: str, df: pd.DataFrame) -> pd.DataFrame:
-    # Identify duplicate rows (same timestamp and all values, excluding file_row and logger_ts)
-    data_cols = [c for c in df.columns if c not in ("file_row", "logger_ts")]
-    is_dup = df.duplicated(subset=data_cols, keep="first")
+    meas_cols = [c for c in df.columns if c in MEASUREMENT_COLUMNS or c == "timestamp_utc"]
+    dup_mask = df.duplicated(subset=meas_cols, keep="first")
 
-    if is_dup.any():
-        # Group consecutive duplicates into blocks
+    if dup_mask.any():
+        is_true = dup_mask.values
         blocks = []
-        curr_block = []
-        for idx in df.index:
-            if is_dup.loc[idx]:
-                curr_block.append(idx)
-            else:
-                if curr_block:
-                    blocks.append(curr_block)
-                    curr_block = []
-        if curr_block:
-            blocks.append(curr_block)
+        in_block = False
+        start_idx = None
+        for i, val in enumerate(is_true):
+            if val and not in_block:
+                in_block = True
+                start_idx = i
+            elif not val and in_block:
+                blocks.append((start_idx, i - 1))
+                in_block = False
+        if in_block:
+            blocks.append((start_idx, len(is_true) - 1))
 
-        for block_indices in blocks:
-            block_df = df.loc[block_indices]
-            count = len(block_df)
-            first_row = int(block_df["file_row"].iloc[0])
-            last_row = int(block_df["file_row"].iloc[-1])
-            start_utc = block_df["logger_ts"].iloc[0].strftime("%Y-%m-%d %H:%M")
-            end_utc = block_df["logger_ts"].iloc[-1].strftime("%Y-%m-%d %H:%M")
-            note = (
-                f"All {count} rows appear a second time, identical, at the end of the file "
-                f"(rows {first_row}-{last_row}); drop the copy so rain is not counted twice."
-            )
+        for s_idx, e_idx in blocks:
+            sub = df.iloc[s_idx : e_idx + 1]
+            count = len(sub)
+            start_row = int(sub["file_row"].iloc[0])
+            end_row = int(sub["file_row"].iloc[-1])
+            start_utc = sub["logger_ts"].iloc[0].strftime("%Y-%m-%d %H:%M")
+            end_utc = sub["logger_ts"].iloc[-1].strftime("%Y-%m-%d %H:%M")
+
             checks.flags.add_flag(
-                station_id, "all", start_utc, end_utc, "day re-sent twice", "exclude", note
+                station_id=station_id,
+                channel="all",
+                start_utc=start_utc,
+                end_utc=end_utc,
+                issue="day re-sent twice",
+                action="exclude",
+                note=(
+                    f"All {count} rows of {start_utc.split()[0]} appear a second time, "
+                    f"identical, at the end of the file (rows {start_row}-{end_row}); "
+                    f"drop the copy so rain is not counted twice."
+                ),
             )
 
-        df = df[~is_dup].copy()
-
-    return df
+    return df[~dup_mask].copy()
 
 
 def fix_clock(station_id: str, df: pd.DataFrame, runs: list) -> pd.DataFrame:
-    df["ts"] = df["logger_ts"].copy()
+    df = df.copy()
+    df["ts"] = df["logger_ts"]
 
-    candidate_runs = [
+    qualifying_runs = [
         r
         for r in runs
         if abs(r[0]) >= config.CLOCK_TOL_MIN and r[3] >= config.CLOCK_MIN_LINES
     ]
 
-    for idx, (offset_min, first_gps_log, last_gps_log, n_lines) in enumerate(candidate_runs):
-        # find the first data row of that run
-        jump_diffs = (df["logger_ts"] - df["logger_ts"].shift(1)).dt.total_seconds() / 60.0
-        expected_jump = config.DATA_INTERVAL_MIN + offset_min
-        jump_mask = (jump_diffs >= expected_jump - 15.0) & (jump_diffs <= expected_jump + 15.0)
+    if not qualifying_runs:
+        return df
 
-        if jump_mask.any():
-            start_pos = df.index.get_loc(df[jump_mask].index[0])
-        else:
-            cutoff = first_gps_log - pd.Timedelta(hours=1)
-            matching = df[df["logger_ts"] >= cutoff]
-            start_pos = df.index.get_loc(matching.index[0]) if len(matching) > 0 else 0
+    run_spans = []
+    for r_idx, run in enumerate(qualifying_runs):
+        offset_min, first_lts, last_lts, n_lines = run
+        target_jump = config.DATA_INTERVAL_MIN + offset_min
 
-        # run ends at the row before next run starts or last row
-        if idx + 1 < len(candidate_runs):
-            next_off = candidate_runs[idx + 1][0]
-            next_jump = config.DATA_INTERVAL_MIN + next_off
-            next_mask = (jump_diffs >= next_jump - 15.0) & (jump_diffs <= next_jump + 15.0)
-            if next_mask.any():
-                end_pos = df.index.get_loc(df[next_mask].index[0]) - 1
+        run_start_idx = None
+        for i in range(1, len(df)):
+            prev_ts = df["logger_ts"].iloc[i - 1]
+            curr_ts = df["logger_ts"].iloc[i]
+            jump_min = (curr_ts - prev_ts).total_seconds() / 60.0
+            if abs(jump_min - target_jump) <= 15:
+                run_start_idx = i
+                break
+
+        if run_start_idx is None:
+            threshold_time = first_lts - pd.Timedelta(hours=1)
+            matches = df.index[df["logger_ts"] >= threshold_time]
+            if len(matches) > 0:
+                run_start_idx = int(matches[0])
             else:
-                end_pos = len(df) - 1
+                run_start_idx = 0
+
+        run_spans.append((run_start_idx, run))
+
+    for idx, (start_idx, run) in enumerate(run_spans):
+        offset_min, first_lts, last_lts, n_lines = run
+        if idx + 1 < len(run_spans):
+            end_idx = run_spans[idx + 1][0] - 1
         else:
-            end_pos = len(df) - 1
+            end_idx = len(df) - 1
 
-        # Apply offset to ts: ts = logger_ts - offset
-        target_indices = df.index[start_pos : end_pos + 1]
-        df.loc[target_indices, "ts"] = df.loc[target_indices, "logger_ts"] - pd.Timedelta(minutes=offset_min)
-
-        run_slice = df.loc[target_indices]
-        start_utc = run_slice["ts"].iloc[0].strftime("%Y-%m-%d %H:%M")
-        end_utc = run_slice["ts"].iloc[-1].strftime("%Y-%m-%d %H:%M")
-        log_start = run_slice["logger_ts"].iloc[0].strftime("%Y-%m-%d %H:%M")
-        log_end = run_slice["logger_ts"].iloc[-1].strftime("%Y-%m-%d %H:%M")
-        first_file_row = int(run_slice["file_row"].iloc[0])
-        last_file_row = int(run_slice["file_row"].iloc[-1])
-        hours_add = -offset_min / 60.0
-
-        note = (
-            f"After the battery swap the logger ran {abs(offset_min)//60} h behind UTC "
-            f"(GPS offset {offset_min} min in {n_lines} sentences; timestamps jump back "
-            f"{abs(offset_min)//60} h at file row {first_file_row}); add {hours_add:.0f} h to logger times "
-            f"{log_start} to {log_end}."
+        df.iloc[start_idx : end_idx + 1, df.columns.get_loc("ts")] = (
+            df["logger_ts"].iloc[start_idx : end_idx + 1]
+            - pd.Timedelta(minutes=offset_min)
         )
+
+        start_true_utc = df["ts"].iloc[start_idx].strftime("%Y-%m-%d %H:%M")
+        end_true_utc = df["ts"].iloc[end_idx].strftime("%Y-%m-%d %H:%M")
+        start_row = int(df["file_row"].iloc[start_idx])
+        start_logger_str = df["logger_ts"].iloc[start_idx].strftime("%Y-%m-%d %H:%M")
+        end_logger_str = df["logger_ts"].iloc[end_idx].strftime("%Y-%m-%d %H:%M")
+
+        add_hours = -offset_min / 60.0
+        add_hours_str = (
+            f"add {int(add_hours)} h"
+            if add_hours.is_integer()
+            else f"add {add_hours:.1f} h"
+        )
+
         checks.flags.add_flag(
-            station_id, "all", start_utc, end_utc, "logger clock on local time", "correct", note
+            station_id=station_id,
+            channel="all",
+            start_utc=start_true_utc,
+            end_utc=end_true_utc,
+            issue="logger clock on local time",
+            action="correct",
+            note=(
+                f"After the battery swap the logger ran {int(add_hours)} h behind UTC "
+                f"(GPS offset {offset_min} min in {n_lines} sentences; timestamps jump back "
+                f"{int(add_hours)} h at file row {start_row}); {add_hours_str} to logger "
+                f"times {start_logger_str} to {end_logger_str}."
+            ),
         )
 
     return df
@@ -118,27 +142,36 @@ def fix_clock(station_id: str, df: pd.DataFrame, runs: list) -> pd.DataFrame:
 
 def find_gaps(station_id: str, df: pd.DataFrame) -> pd.DataFrame:
     df = df.sort_values("ts").reset_index(drop=True)
-    step_diffs = (df["ts"] - df["ts"].shift(1)).dt.total_seconds() / 60.0
-    gap_indices = df.index[step_diffs > 1.5 * config.DATA_INTERVAL_MIN].tolist()
+    step_thresh_min = 1.5 * config.DATA_INTERVAL_MIN
 
-    for idx in gap_indices:
-        prev_ts = df["ts"].iloc[idx - 1]
-        curr_ts = df["ts"].iloc[idx]
-        diff_min = step_diffs.iloc[idx]
-        missing_count = int(round(diff_min / config.DATA_INTERVAL_MIN)) - 1
-        start_utc = (prev_ts + pd.Timedelta(minutes=config.DATA_INTERVAL_MIN)).strftime("%Y-%m-%d %H:%M")
-        end_utc = (curr_ts - pd.Timedelta(minutes=config.DATA_INTERVAL_MIN)).strftime("%Y-%m-%d %H:%M")
-        hrs = int(diff_min // 60)
-        mins = int(diff_min % 60)
-        time_str = f"{hrs} h {mins} min" if hrs > 0 else f"{mins} min"
-        note = (
-            f"No data for {time_str} ({missing_count} missing records); "
-            f"treat as missing, do not fill in."
-        )
-        checks.flags.add_flag(
-            station_id, "all", start_utc, end_utc, "transmission gap", "exclude", note
-        )
+    for i in range(1, len(df)):
+        prev_ts = df["ts"].iloc[i - 1]
+        curr_ts = df["ts"].iloc[i]
+        diff_sec = (curr_ts - prev_ts).total_seconds()
+        diff_min = diff_sec / 60.0
 
-    # Returns df sorted by ts, with ts as index, keeping only measurement columns
-    cols_to_keep = [c for c in MEASUREMENT_COLS if c in df.columns]
-    return df.set_index("ts")[cols_to_keep]
+        if diff_min > step_thresh_min:
+            missing_count = int(round(diff_min / config.DATA_INTERVAL_MIN)) - 1
+            first_missing = prev_ts + pd.Timedelta(minutes=config.DATA_INTERVAL_MIN)
+            last_missing = curr_ts - pd.Timedelta(minutes=config.DATA_INTERVAL_MIN)
+            start_utc = first_missing.strftime("%Y-%m-%d %H:%M")
+            end_utc = last_missing.strftime("%Y-%m-%d %H:%M")
+
+            hours = int(diff_min // 60)
+            mins = int(diff_min % 60)
+            time_str = f"{hours} h {mins} min" if hours > 0 else f"{mins} min"
+
+            checks.flags.add_flag(
+                station_id=station_id,
+                channel="all",
+                start_utc=start_utc,
+                end_utc=end_utc,
+                issue="transmission gap",
+                action="exclude",
+                note=(
+                    f"No data for {time_str} ({missing_count} missing records); "
+                    f"treat as missing, do not fill in."
+                ),
+            )
+
+    return df.set_index("ts")[MEASUREMENT_COLUMNS]

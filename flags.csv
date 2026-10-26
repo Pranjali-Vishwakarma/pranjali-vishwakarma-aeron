@@ -1,6 +1,6 @@
 station_id,channel,start_utc,end_utc,issue,action,note
-S05,metadata,2025-03-01 00:00,2025-04-11 23:00,install-sheet latitude wrong,correct,982 GPS fixes agree on 39.754 N; the sheet says 39.570 (20.5 km away) while longitude and altitude match; use the GPS latitude.
-S02,metadata,2025-03-01 00:00,2025-04-11 23:00,noisy GPS link,keep,"30 of 1174 GPS sentences fail the checksum (about 2.6%) vs 1-8 at other stations; bad lines ignored, weather data unaffected; check the GPS cable."
+S05,metadata,2025-03-01 00:00,2025-04-11 23:00,install-sheet latitude wrong,correct,"982 GPS fixes agree on 39.754 N, -104.8957 W; the sheet says 39.570, -104.8957 (20.5 km away); use the GPS latitude."
+S02,metadata,2025-03-01 00:00,2025-04-11 23:00,noisy GPS link,keep,"30 of 1174 GPS sentences fail the checksum (2.6%) vs network median 0.3%; bad lines ignored, weather data unaffected; check the GPS cable."
 S06,all,2025-03-24 16:10,2025-04-11 23:50,logger clock on local time,correct,After the battery swap the logger ran 6 h behind UTC (GPS offset -360 min in 435 sentences; timestamps jump back 6 h at file row 3411); add 6 h to logger times 2025-03-24 10:10 to 2025-04-11 17:50.
-S08,all,2025-04-05 00:00,2025-04-05 23:50,day re-sent twice,exclude,"All 144 rows appear a second time, identical, at the end of the file (rows 5836-5979); drop the copy so rain is not counted twice."
+S08,all,2025-04-05 00:00,2025-04-05 23:50,day re-sent twice,exclude,"All 144 rows of 2025-04-05 appear a second time, identical, at the end of the file (rows 5836-5979); drop the copy so rain is not counted twice."
 S08,all,2025-03-16 14:00,2025-03-18 01:30,transmission gap,exclude,"No data for 35 h 50 min (214 missing records); treat as missing, do not fill in."
