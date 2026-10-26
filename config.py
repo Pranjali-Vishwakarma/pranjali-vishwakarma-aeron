@@ -32,3 +32,13 @@ RAIN_DRY_DAY_MM = 2          # a neighbour-median day this wet should give the s
 RAIN_BLOCK_MM = 10           # station got 0 while neighbours got this much in total
 RAIN_BURST_MM = 4            # in 10 min while all neighbours got < 1 mm
 SNOW_FRACTION = 0.5          # more than half of tips below 0 C means mostly snow
+
+EVENT_RAIN_MM = 10          # a heavy-rain day
+EVENT_RAIN_SHARE = 0.75     # seen by >= 75% of stations = real storm
+EVENT_RH = 95               # near-saturation
+EVENT_RH_SHARE = 0.6        # >= 60% of stations at once = real fog
+EVENT_RH_MIN_HOURS = 2      # fog must last at least 2 h
+SUN_SHIFT_MIN = 30          # data is built from hourly values, so +-30 min is noise
+SUN_SHIFT_DAYS = 3          # shift must persist 3 days (one cloudy day can fake it)
+NIGHT_GHI = 50              # sunlight above this with the sun down is impossible
+NIGHT_MAX_COUNT = 6         # allow a few twilight readings before flagging

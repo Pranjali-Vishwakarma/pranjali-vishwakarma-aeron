@@ -3,12 +3,14 @@ import sys
 
 import pandas as pd
 
+import checks.events
 import checks.exposure
 import checks.flags
 import checks.gps
 import checks.limits
 import checks.loader
 import checks.neighbours
+import checks.sun
 import checks.timeline
 
 if len(sys.argv) != 2 or not os.path.isdir(sys.argv[1]):
@@ -87,6 +89,12 @@ checks.exposure.blocked_gauge(stations_df, PANEL, BAD, NB)
 checks.exposure.rain_burst(stations_df, PANEL, BAD, NB)
 checks.exposure.snow(stations_df, PANEL, BAD)
 
-# 7. write_flags("flags.csv") and print "wrote flags.csv: N flags"
+checks.sun.timing(stations_df, PANEL, BAD)
+checks.sun.night(stations_df, PANEL)
+checks.events.storms(stations_df, PANEL, BAD)
+checks.events.fog(stations_df, PANEL, BAD)
+
+# 7. sort flags by station_id, then start_utc, then channel, and write
+checks.flags.FLAGS.sort(key=lambda r: (r["station_id"], r["start_utc"], r["channel"]))
 checks.flags.write_flags("flags.csv")
 print(f"wrote flags.csv: {len(checks.flags.FLAGS)} flags")
