@@ -1,5 +1,5 @@
 station_id,channel,start_utc,end_utc,issue,action,note
-ALL,rain_mm,2025-03-29 00:00,2025-03-30 23:50,network-wide storm,keep,"6 of 8 stations got >=10 mm on 29 Mar and most got 10+ mm again on 30 Mar; real weather, not a fault."
+ALL,rain_mm,2025-03-29 00:00,2025-03-29 23:50,network-wide storm,keep,"6 of 8 stations got >=10 mm on 29 Mar; real weather, not a fault."
 ALL,rh_pct,2025-03-30 02:30,2025-03-30 09:20,network-wide fog,keep,"All 8 stations at >=95% humidity at the same time overnight; real fog, not a sensor fault."
 S01,all,2025-03-01 00:00,2025-04-11 23:50,high-altitude site differs from network,keep,"At 2913 m (about 1200 m above the others) S01 is colder, windier and lower in pressure for real; compare it only with itself, not the network median."
 S01,rain_mm,2025-03-01 00:00,2025-04-11 23:50,precipitation mostly snow,keep,"80% of rain readings happened below 0 C, so most of it is snow; totals plausible but timing unreliable unless the gauge is heated."
