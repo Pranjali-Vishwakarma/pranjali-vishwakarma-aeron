@@ -9,23 +9,36 @@ import config
 
 def storms(stations, PANEL, BAD):
     """Daily rain totals; runs of days where >= EVENT_RAIN_SHARE of stations have >= EVENT_RAIN_MM."""
-    rain_df = PANEL["rain_mm"].copy()
-    rain_df[BAD["rain_mm"]] = np.nan
+    rain_df = PANEL["rain_mm"]
+    bad_rain = BAD["rain_mm"]
 
     ts = rain_df.index
     dates = sorted(set(ts.strftime("%Y-%m-%d")))
 
-    daily_totals = {}
+    wet_counts = {}
+    storm_day = {}
     for d in dates:
         mask_d = ts.strftime("%Y-%m-%d") == d
-        daily_totals[d] = rain_df.loc[mask_d].sum(min_count=1)
+        sub_rain = rain_df.loc[mask_d]
+        sub_bad = bad_rain.loc[mask_d]
 
-    daily_df = pd.DataFrame.from_dict(daily_totals, orient="index")
+        valid_stations = [st for st in stations.index if not sub_bad[st].any()]
+        n_valid = len(valid_stations)
+
+        if n_valid > 0:
+            daily_totals = sub_rain[valid_stations].sum()
+            n_wet = int((daily_totals >= config.EVENT_RAIN_MM).sum())
+            share = n_wet / n_valid
+        else:
+            n_wet = 0
+            share = 0.0
+
+        wet_counts[d] = n_wet
+        storm_day[d] = share >= config.EVENT_RAIN_SHARE
+
+    wet_stations_per_day = pd.Series(wet_counts)
+    storm_day = pd.Series(storm_day)
     n_stations = len(stations)
-
-    # For each day, count how many stations had >= EVENT_RAIN_MM
-    wet_stations_per_day = (daily_df >= config.EVENT_RAIN_MM).sum(axis=1)
-    storm_day = (wet_stations_per_day / n_stations) >= config.EVENT_RAIN_SHARE
 
     # Find consecutive runs of storm days
     run_start = None
